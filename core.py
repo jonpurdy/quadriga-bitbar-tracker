@@ -4,84 +4,121 @@
 import requests
 import json
 import logging
+import time
 
-#logging.basicConfig(level="DEBUG", format='[%(asctime)s][%(levelname)s][%(name)s] %(message)s')
+import requests
+import pymysql
 
-params = (
-    ('book', 'eth_cad'),
-)
+import config_loader
 
-try:
-	r_quad = requests.get('https://api.quadrigacx.com/v2/ticker', params=params)
-	r_quad_dict = json.loads(r_quad.text)
-	quadriga_last = r_quad_dict["last"]
-except:
-	quadriga_last = 0
+logging.basicConfig(level="DEBUG", format='[%(asctime)s][%(levelname)s][%(name)s] %(message)s', filename="arbcalc.log")
+logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 
-try:
-	r_gdax = requests.get('https://api.gdax.com/products/ETH-USD/ticker')
-	r_gdax_dict = json.loads(r_gdax.text)
-	gdax_price = round(float(r_gdax_dict["price"]), 2)
-except:
-	gdax_price = 0
+from flask import Flask
+app = Flask(__name__)
 
-try:
-	r_korbit = requests.get('https://api.korbit.co.kr/v1/ticker?currency_pair=eth_krw')
-	r_korbit_dict = json.loads(r_korbit.text)
-	korbit_price = r_korbit_dict["last"]
-	logging.debug(r_korbit.text)
-	logging.debug("Korbit price: %s" % korbit_price)
-except:
-	korbit_price = 0
+@app.route('/')
+def hello_world():
+    return 'Hello, World!'
 
-currFrom = "CAD"
-currTo = ["USD", "KRW"]
+def main():
 
-urlParamTo = currTo[0]
-if len(currTo) > 1:
-    urlParamTo = ",".join(currTo)
 
-url = "http://api.fixer.io/latest?base=" + currFrom + "&symbols=" + urlParamTo
-r_fixer = requests.get(url)
-r_fixer_dict = json.loads(r_fixer.text)
-cad_usd_rate = r_fixer_dict["rates"]['USD']
-cad_krw_rate = r_fixer_dict["rates"]['KRW']
-logging.debug("cadusd %s, cadkrw %s" % (cad_usd_rate, cad_krw_rate))
+    # Set configuration and logging up first
+    config_location = "~/.arb-calc"
+    config = config_loader.load_config(config_location)
 
-quadriga_to_usd = float(quadriga_last) * float(cad_usd_rate)
-gdax_to_cad = float(gdax_price) / float(cad_usd_rate)
-quadriga_to_krw = float(quadriga_last) * float(cad_krw_rate)
-logging.debug("%s %s" % (float(quadriga_last), float(cad_krw_rate)))
-logging.debug("quadriga_to_krw %s" % quadriga_to_krw)
-korbit_to_cad = float(korbit_price) / float(cad_krw_rate)
-logging.debug("korbit price %s, cadkrw %s" % (float(korbit_price), float(cad_krw_rate)))
+    DB_IP = config.get('main', 'DB_IP')
+    DB_USERNAME = config.get('main', 'DB_USERNAME')
+    DB_PASSWORD = config.get('main', 'DB_PASSWORD')
 
-# Calculate percentage difference
-x = float(quadriga_last) - gdax_to_cad
-diff_gdax = x / float(quadriga_last) * 100
+    crypto_list = ['btc', 'eth', 'xrp']
 
-y = float(quadriga_last) - korbit_to_cad
-diff_korbit = y / float(quadriga_last) * 100
 
-# in menu bar
-print("$%s" % quadriga_last)
+    a = {'name': 'korbit'}
+    b = {'name': 'kraken'}
+    e_list = [a, b] # used to iterate through db queries
 
-# in submenu
-print("---")
-print("$%s Quadriga CAD" % quadriga_last)
-print("$%s GDAX CAD" % round(gdax_to_cad, 2))
-print("$%s Korbit CAD" % round(korbit_to_cad, 2))
-print("---")
-print("$%s Quadriga USD" % round(quadriga_to_usd,2))
-print("$%s GDAX USD" % round(gdax_price, 2))
-print("---")
-print("₩%s Quadriga" % format(int(quadriga_to_krw), ",d"))
-print("₩%s Korbit" % format(int(korbit_price), ",d"))
-print("---")
-print("Q Diff GDAX: %s%%" % round(diff_gdax, 1))
-print("Q Diff Korbit: %s%%" % round(diff_korbit, 1))
-print("---")
-print("Links:")
-print("Quadriga Trade | href=https://www.quadrigacx.com/trade")
-print("GDAX ETH-USD | href=https://www.gdax.com/trade/ETH-USD")
-print("Korbit ETH Market | href=https://www.korbit.co.kr/eth_market")
+    try:
+        db = pymysql.connect(DB_IP, DB_USERNAME, DB_PASSWORD, cursorclass=pymysql.cursors.DictCursor)
+    except Exception as e:
+        print(e)
+        print("Couldn't connect to DB.")
+        exit()
+
+
+    for e in e_list:
+        #print("exchange: %s" % e['name'])
+
+        for c in crypto_list:
+            #print("crypto: %s" % c)
+            
+            query = """
+            SELECT id, created, exchange, price_usd 
+            FROM crypto_historical.%s
+            WHERE exchange = '%s'
+            ORDER BY created DESC
+            LIMIT 1
+            """ % (c, e['name'])
+
+            cursor = db.cursor()
+            cursor.execute(query)
+            result = cursor.fetchall()
+
+            # sets the price of the cryptocurrency for the particular exchange
+            # scroll up to see loop-defined variables e and c
+            e[c] = result[0]['price_usd']
+
+            # .strftime('%Y-%m-%d %H:%M:%S')
+
+        #print("-----")
+
+    db.close()
+
+    # korbit_prices_usd_dict = {'name': 'korbit', 'btc': float(15000), 'eth': float(440), 'xrp': float(0.24)}
+    # kraken_prices_usd_dict = {'name': 'kraken', 'btc': float(14000), 'eth': float(430), 'xrp': float(0.26)}
+
+    # Calculate percentage difference for each pair
+    for curr in crypto_list:
+        get_price_spread(curr, a[curr], b[curr])
+
+
+
+def get_price_spread(curr, a, b):
+
+    # a / b = difference, * 100 = percentage difference
+    # a is 150% more/less than b
+
+    print("currency: %s" % curr)
+    print("a: $%s" %a)
+    print("b: $%s" %b)
+    spread = a / b * 100 - 100
+    spread = format(float(spread), '.2f')
+    print("spread: %s%%" %spread)
+    print("----")
+
+def load_config(config_location):
+    '''
+    Loads config from config.
+    '''
+
+    # Getting configuration first
+    file_path = os.path.expanduser(config_location)
+    # configparser silently fails if the file doesn't exist
+    if os.path.isfile(file_path):
+        config = configparser.ConfigParser()
+        try:
+            config.read(file_path)
+        except Exception as e:
+            print(e)
+            print("Couldn't read configuration file.")
+    else:
+        print("Couldn't open config file. Has it been created as %s ?"
+              % config_location)
+        return 0
+
+    return config
+
+
+if __name__ == '__main__':
+    main()
