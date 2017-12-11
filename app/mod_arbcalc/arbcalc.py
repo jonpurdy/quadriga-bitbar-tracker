@@ -9,24 +9,22 @@ import time
 import requests
 import pymysql
 
-import config_loader
+import os
+import configparser
 
 logging.basicConfig(level="DEBUG", format='[%(asctime)s][%(levelname)s][%(name)s] %(message)s', filename="arbcalc.log")
 logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 
-from flask import Flask
-app = Flask(__name__)
-
-@app.route('/')
-def hello_world():
-    return 'Hello, World!'
 
 def main():
 
+    get_all_spreads()
+
+def get_all_spreads():
 
     # Set configuration and logging up first
     config_location = "~/.arb-calc"
-    config = config_loader.load_config(config_location)
+    config = load_config(config_location)
 
     DB_IP = config.get('main', 'DB_IP')
     DB_USERNAME = config.get('main', 'DB_USERNAME')
@@ -78,10 +76,14 @@ def main():
     # korbit_prices_usd_dict = {'name': 'korbit', 'btc': float(15000), 'eth': float(440), 'xrp': float(0.24)}
     # kraken_prices_usd_dict = {'name': 'kraken', 'btc': float(14000), 'eth': float(430), 'xrp': float(0.26)}
 
+    spreads = []
+    title = "%s vs %s" % (a["name"], b["name"])
     # Calculate percentage difference for each pair
     for curr in crypto_list:
-        get_price_spread(curr, a[curr], b[curr])
-
+        spread = get_price_spread(curr, a[curr], b[curr])
+        spreads.append([curr, "%s%%" % spread])
+        #spread_string += "%s\n" % spread
+    return spreads, title
 
 
 def get_price_spread(curr, a, b):
@@ -96,6 +98,7 @@ def get_price_spread(curr, a, b):
     spread = format(float(spread), '.2f')
     print("spread: %s%%" %spread)
     print("----")
+    return spread
 
 def load_config(config_location):
     '''
@@ -119,6 +122,28 @@ def load_config(config_location):
 
     return config
 
+
+def load_config(config_location):
+    '''
+    Loads config from config.
+    '''
+
+    # Getting configuration first
+    file_path = os.path.expanduser(config_location)
+    # configparser silently fails if the file doesn't exist
+    if os.path.isfile(file_path):
+        config = configparser.ConfigParser()
+        try:
+            config.read(file_path)
+        except Exception as e:
+            print(e)
+            print("Couldn't read configuration file.")
+    else:
+        print("Couldn't open config file. Has it been created as %s ?"
+              % config_location)
+        return 0
+
+    return config
 
 if __name__ == '__main__':
     main()
